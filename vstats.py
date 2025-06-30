@@ -10,9 +10,26 @@ def u8_popcount(value: int) -> int:
     return (value + (value >> 4)) & 0x0f
 
 @dataclass
+class WorldInfo:
+    cave_or_indoor_distance: int # distance to entrance from interior
+    water_distance: int
+    forest_density: int
+    surface_flags: int # bit 6 = water, bit 7 = miasma
+    cave_entrance_distance: int # distance to cave entrance but from outside of cave
+    material: int # botttom 4 bits is the water material
+    route_dist: int
+    water_depth: int
+    water_flow_rate: int
+    tera_mat: int
+    forest_type_flags: int # bottom 5 bits is forest type, 6 = wilted, 7 = snowy
+    _0b: int # maybe padding
+    cave_id: int
+
+@dataclass
 class Area:
     pos: Tuple[int, int, int]
     voxel_masks: List[List[int]]
+    world_info: List[WorldInfo]
 
 class Context:
     def __init__(self, romfs_path: str, world_name: str, gamedata_flags: List[str]):
@@ -61,18 +78,18 @@ class Context:
         num_area_y: int = int(self.unit_size[1] / self.area_sidelength)
         num_area_z: int = int(self.unit_size[2] / self.area_sidelength)
         assert area_count == num_area_x * num_area_y * num_area_z, "Mismatching area count!"
-        areas: List[List[List[int]]] = []
+        areas: List[Area] = []
         # areas are arranged in X -> Z -> Y order
         for y in range(num_area_y):
             for z in range(num_area_z):
                 for x in range(num_area_x):
-                    areas.append(Area((x, y, z), self.load_area(stream, is_single_scene)))
+                    areas.append(self.load_area(stream, is_single_scene, x, y, z))
         return areas
 
-    def load_area(self, stream: ReadStream, is_single_scene: bool) -> List[List[int]]:
+    def load_area(self, stream: ReadStream, is_single_scene: bool, x: int, y: int, z: int) -> Area:
         size: int = stream.read_u32()
         pos: int = stream.tell()
-        voxels: List[List[int]] = self.load_voxel_masks(stream)
+        area: Area = Area((x, y, z), self.load_voxel_masks(stream), [])
         assert stream.tell() - pos == size, "Incorrect size!"
         size = stream.read_u32()
         stream.skip(size) # surface flags (exist at the 1x1x1 voxel level)
@@ -80,8 +97,24 @@ class Context:
             size = stream.read_u32()
             stream.skip(size) # unknown flag (exist at the 2x2x2 voxel level)
             size = stream.read_u32()
-            stream.skip(size * 0x14) # world info (exist at the 4x4x4 voxel level)
-        return voxels
+            for i in range(size):
+                info: WorldInfo = WorldInfo(
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u8(),
+                    stream.read_u64()
+                )
+                area.world_info.append(info)
+        return area
     
     def load_voxel_masks(self, stream: ReadStream) -> List[List[int]]:
         masks: List[List[int]] = []
@@ -105,7 +138,7 @@ class Context:
             ]
 
             if len(area.voxel_masks[0]) > 0:
-                self.iterate_octree(base_pos, positions, area.voxel_masks, 0, 0)
+                self.iterate_octree(base_pos, positions, area, 0, 0)
 
         for pos in positions:
             outfile.write(f"v {pos[0]} {pos[1]} {pos[2]}\n")
@@ -121,9 +154,14 @@ class Context:
 
         return len(positions)
     
-    def iterate_octree(self, base_pos: List[int], positions: List[List[int]], masks: List[List[int]], mask_index: int, level: int = 0) -> None:
-        mask: int = masks[level][mask_index]
+    @staticmethod
+    def get_index(pos_flag: int, mask: int) -> int:
+        return u8_popcount(mask & (-1 << pos_flag ^ 0xffffffff)) + (mask >> 8)
+
+    def iterate_octree(self, base_pos: List[int], positions: List[List[int]], area: Area, mask_index: int, level: int = 0) -> None:
+        mask: int = area.voxel_masks[level][mask_index]
         if level == 7:
+            # iterate through child nodes (optionally filtered by surface info)
             for i in range(8):
                 if mask >> i & 1 == 0:
                     continue
@@ -133,18 +171,43 @@ class Context:
                     base_pos[2] + (i >> 2 & 1) * (1 << (7 - level))
                 ])
         else:
-            # iterate through child nodes
-            for i in range(8):
-                if mask >> i & 1 == 0:
-                    continue
-                child_bits: int = mask & (-1 << i ^ 0xffffffff)
-                index: int = u8_popcount(child_bits) + (mask >> 8)
-                new_pos: List[int] = [
-                    base_pos[0] + (i & 1) * (1 << (7 - level)),
-                    base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),
-                    base_pos[2] + (i >> 2 & 1) * (1 << (7 - level))
-                ]
-                self.iterate_octree(new_pos, positions, masks, index, level + 1)
+            if level == 6:
+                # iterate through child nodes (optionally filtered by ???)
+                for i in range(8):
+                    if mask >> i & 1 == 0:
+                        continue
+                    index: int = self.get_index(i, mask)
+                    new_pos: List[int] = [
+                        base_pos[0] + (i & 1) * (1 << (7 - level)),
+                        base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),
+                        base_pos[2] + (i >> 2 & 1) * (1 << (7 - level))
+                    ]
+                    self.iterate_octree(new_pos, positions, area, index, level + 1)
+            elif level == 5:
+                # iterate through child nodes (optionally filtered by world info)
+                for i in range(8):
+                    if mask >> i & 1 == 0:
+                        continue
+                    index: int = self.get_index(i, mask)
+                    # info: WorldInfo = area.world_info[index]
+                    new_pos: List[int] = [
+                        base_pos[0] + (i & 1) * (1 << (7 - level)),
+                        base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),
+                        base_pos[2] + (i >> 2 & 1) * (1 << (7 - level))
+                    ]
+                    self.iterate_octree(new_pos, positions, area, index, level + 1)
+            else:
+                # iterate through child nodes
+                for i in range(8):
+                    if mask >> i & 1 == 0:
+                        continue
+                    index: int = self.get_index(i, mask)
+                    new_pos: List[int] = [
+                        base_pos[0] + (i & 1) * (1 << (7 - level)),
+                        base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),
+                        base_pos[2] + (i >> 2 & 1) * (1 << (7 - level))
+                    ]
+                    self.iterate_octree(new_pos, positions, area, index, level + 1)
     
     def dump_obj(self, outpath: str) -> None:
         with open(outpath, "w", encoding="utf-8") as outfile:
@@ -177,7 +240,8 @@ class Context:
             #     outfile.write(f"f {i * 8 + 5} {i * 8 + 6} {i * 8 + 8} {i * 8 + 7}\n")
 
     def dump_individual_objs(self, outdir: str = "") -> None:
-        os.makedirs(outdir, exist_ok=True)
+        if outdir:
+            os.makedirs(outdir, exist_ok=True)
         for x in range(self.grid_dimensions[0]):
             for z in range(self.grid_dimensions[2]):
                 path: str = os.path.join(self.romfs_path, "VolumeStats", self.world_name, f"X{x}_Z{z}.vsts.zs")
@@ -197,6 +261,16 @@ class Context:
                         self.world_base[2] + self.unit_size[2] * z
                     ]
                     self.dump_unit_obj(path, base_pos, outfile)
+    
+    def dump_unit_obj_individual(self, x: int, z: int, outdir: str = "", gamedata: str = "") -> None:
+        if outdir:
+            os.makedirs(outdir, exist_ok=True)
+        if gamedata == "":
+            path: str = os.path.join(self.romfs_path, "VolumeStats", self.world_name, f"X{x}_Z{z}.vsts.zs")
+        else:
+            path: str = os.path.join(self.romfs_path, "VolumeStats", self.world_name, gamedata, f"X{x}_Z{z}.vsts.zs")
+        with open(os.path.join(outdir, f"{self.world_name}_X{x}_Z{z}.obj"), "w", encoding="utf-8") as outfile:
+            self.dump_unit_obj(path, [0, self.world_base[1], 0], outfile)
 
 if __name__ == "__main__":
     import sys
