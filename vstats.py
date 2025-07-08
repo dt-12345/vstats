@@ -9,6 +9,13 @@ def u8_popcount(value: int) -> int:
     value = ((value >> 2) & 0x33) + (value & 0x33)
     return (value + (value >> 4)) & 0x0f
 
+def read_bits(index: int, values: List[int], size: int) -> int:
+    bit_offset: int = index * size
+    idx: int = bit_offset >> 3
+    shift: int = bit_offset & 7
+    # assume bit_offset is even and size will not overflow into 3 bytes
+    return ((values[idx] & 0xff) >> shift | (values[idx + 1] & 0xff) << (8 - shift)) & ((1 << size) - 1)
+
 @dataclass
 class WorldInfo:
     cave_or_indoor_distance: int # distance to entrance from interior
@@ -152,9 +159,8 @@ class Context:
             for i in range(8):
                 if mask >> i & 1 == 0:
                     continue
-                # index: int = self.get_index(i, mask)
-                # bit_offset: int = index * 10
-                # flags: int = (area.surface_info[bit_offset >> 3] >> (bit_offset & 7)) & 0x3ff
+                index: int = self.get_index(i, mask)
+                # flags: int = read_bits(index, area.surface_info, 10)
                 positions.append([
                     base_pos[0] + (i & 1) * (1 << (7 - level)),
                     base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),
@@ -167,8 +173,7 @@ class Context:
                     if mask >> i & 1 == 0:
                         continue
                     index: int = self.get_index(i, mask)
-                    # bit_offset: int = index * 6
-                    # flags: int = (area.surface_info2[bit_offset >> 3] >> (bit_offset & 7)) & 0x3f
+                    # flags: int = read_bits(index, area.surface_info2, 6)
                     new_pos: List[int] = [
                         base_pos[0] + (i & 1) * (1 << (7 - level)),
                         base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),

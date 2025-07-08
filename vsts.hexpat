@@ -48,8 +48,8 @@ struct ResArea<auto is_single_scene> {
         5 = facing south
         6 = indoors
         7 = cave
-        8 = valid traveler checkpoint (?)
-        9 = ?
+        8 = not overworld terrain surface? invalid traveler checkpoint?
+        9 = ? (seems like it's mostly structures/buildings but not all of them?)
     */
     ResArray<u8> surface_info; // for each 1x1x1 voxel
     
