@@ -14,7 +14,8 @@ class WorldInfo:
     cave_or_indoor_distance: int # distance to entrance from interior
     water_distance: int
     forest_density: int
-    surface_flags: int # bit 6 = water, bit 7 = miasma
+    # ty to howzieky for pointing out the directional flags
+    surface_flags: int # bit 0 = east, 1 = west, 2 = up, 3 = down, 4 = north, 5 = south, 6 = water, 7 = miasma
     cave_entrance_distance: int # distance to cave entrance but from outside of cave
     material: int # botttom 4 bits is the water material
     route_dist: int
@@ -29,6 +30,8 @@ class WorldInfo:
 class Area:
     pos: Tuple[int, int, int]
     voxel_masks: List[List[int]]
+    surface_info: List[int]
+    surface_info2: List[int]
     world_info: List[WorldInfo]
 
 class Context:
@@ -89,31 +92,15 @@ class Context:
     def load_area(self, stream: ReadStream, is_single_scene: bool, x: int, y: int, z: int) -> Area:
         size: int = stream.read_u32()
         pos: int = stream.tell()
-        area: Area = Area((x, y, z), self.load_voxel_masks(stream), [])
+        area: Area = Area((x, y, z), self.load_voxel_masks(stream), [], [], [])
         assert stream.tell() - pos == size, "Incorrect size!"
         size = stream.read_u32()
-        stream.skip(size) # surface flags (exist at the 1x1x1 voxel level)
+        area.surface_info.extend(struct.unpack(f"{size}B", stream.read(size)))
         if not is_single_scene:
             size = stream.read_u32()
-            stream.skip(size) # unknown flag (exist at the 2x2x2 voxel level)
-            size = stream.read_u32()
-            for i in range(size):
-                info: WorldInfo = WorldInfo(
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u8(),
-                    stream.read_u64()
-                )
-                area.world_info.append(info)
+            area.surface_info2.extend(struct.unpack(f"{size}B", stream.read(size)))
+            for i in range(stream.read_u32()):
+                area.world_info.append(WorldInfo(*struct.unpack("<12BQ", stream.read(0x14))))
         return area
     
     def load_voxel_masks(self, stream: ReadStream) -> List[List[int]]:
@@ -165,6 +152,9 @@ class Context:
             for i in range(8):
                 if mask >> i & 1 == 0:
                     continue
+                # index: int = self.get_index(i, mask)
+                # bit_offset: int = index * 10
+                # flags: int = (area.surface_info[bit_offset >> 3] >> (bit_offset & 7)) & 0x3ff
                 positions.append([
                     base_pos[0] + (i & 1) * (1 << (7 - level)),
                     base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),
@@ -177,6 +167,8 @@ class Context:
                     if mask >> i & 1 == 0:
                         continue
                     index: int = self.get_index(i, mask)
+                    # bit_offset: int = index * 6
+                    # flags: int = (area.surface_info2[bit_offset >> 3] >> (bit_offset & 7)) & 0x3f
                     new_pos: List[int] = [
                         base_pos[0] + (i & 1) * (1 << (7 - level)),
                         base_pos[1] + (i >> 1 & 1) * (1 << (7 - level)),

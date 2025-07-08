@@ -8,11 +8,12 @@ struct ResArray<T> {
 };
 
 struct ResWorldInfo {
-    u8 cave_or_indoor_distance;
+    u8 cave_or_indoor_distance; // distance to entrance from interior
     u8 water_distance;
     u8 forest_density;
-    u8 surface_flags; // bit 6 = water, bit 7 = miasma
-    u8 _04; // some other cave-related distance
+    // ty to howzieky for pointing out the directional flags
+    u8 surface_flags; // bit 0 = east, 1 = west, 2 = up, 3 = down, 4 = north, 5 = south, 6 = water, 7 = miasma
+    u8 cave_entrance_distance; // distance to cave entrance but from outside of cave
     u8 material; // botttom 4 bits is the water material
     u8 route_dist;
     u8 water_depth;
@@ -39,12 +40,12 @@ struct ResArea<auto is_single_scene> {
     
     /*
         10 bits per entry
-        0 = ?
-        1 = ?
-        2 = ceiling
-        3 = floor
-        4 = ?
-        5 = ?
+        0 = facing east
+        1 = facing west
+        2 = floor (facing upward)
+        3 = ceiling (facing downward)
+        4 = facing north
+        5 = facing south
         6 = indoors
         7 = cave
         8 = valid traveler checkpoint (?)
@@ -55,9 +56,14 @@ struct ResArea<auto is_single_scene> {
     if (!is_single_scene) {
         /*
             6 bits per entry
-            ???
+            0 = facing east
+            1 = facing west
+            2 = floor (facing upward)
+            3 = ceiling (facing downward)
+            4 = facing north
+            5 = facing south
         */
-        ResArray<u8> unk2; // for each 2x2x2 voxel
+        ResArray<u8> surface_info2; // for each 2x2x2 voxel
         ResArray<ResWorldInfo> world_info; // for each 4x4x4 voxel
     }
 };
